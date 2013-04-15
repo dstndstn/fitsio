@@ -1357,7 +1357,7 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
     LONGLONG firstrow=1;
     LONGLONG firstelem=1;
     LONGLONG nelem=0;
-	PyArray_Descr* dtype;
+    PyArray_Descr* dtype;
     int npy_dtype=0;
     int fits_dtype=0;
 
@@ -1391,8 +1391,8 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
         return NULL;
     }
 
-	dtype = PyArray_DESCR(array);
-	array = PyArray_FromAny(array, dtype, 0, 0, NPY_C_CONTIGUOUS, NULL);
+    dtype = PyArray_DESCR(array);
+    array = PyArray_FromAny(array, dtype, 0, 0, NPY_C_CONTIGUOUS, NULL);
 
     data = PyArray_DATA(array);
     nelem = PyArray_SIZE(array);
