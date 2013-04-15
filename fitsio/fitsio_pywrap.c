@@ -1401,16 +1401,19 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
 
         // this is my wrapper for strings
         if (write_string_column(self->fits, colnum, firstrow, firstelem, nelem, data, &status)) {
+            Py_DECREF(array);
             set_ioerr_string_from_status(status);
             return NULL;
         }
         
     } else {
         if( fits_write_col(self->fits, fits_dtype, colnum, firstrow, firstelem, nelem, data, &status)) {
+            Py_DECREF(array);
             set_ioerr_string_from_status(status);
             return NULL;
         }
     }
+    Py_DECREF(array);
 
     // this is a full file close and reopen
     if (fits_flush_file(self->fits, &status)) {
