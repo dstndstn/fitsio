@@ -1357,7 +1357,7 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
     LONGLONG firstrow=1;
     LONGLONG firstelem=1;
     LONGLONG nelem=0;
-    PyArray_Descr* dtype;
+    //PyArray_Descr* dtype;
     int npy_dtype=0;
     int fits_dtype=0;
 
@@ -1391,8 +1391,8 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
         return NULL;
     }
 
-    dtype = PyArray_DESCR(array);
-    array = PyArray_FromAny(array, dtype, 0, 0, NPY_C_CONTIGUOUS, NULL);
+    //dtype = PyArray_DESCR(array);
+    //array = PyArray_FromAny(array, dtype, 0, 0, NPY_C_CONTIGUOUS, NULL);
 
     data = PyArray_DATA(array);
     nelem = PyArray_SIZE(array);
@@ -1401,19 +1401,19 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
 
         // this is my wrapper for strings
         if (write_string_column(self->fits, colnum, firstrow, firstelem, nelem, data, &status)) {
-            Py_DECREF(array);
+		  //Py_DECREF(array);
             set_ioerr_string_from_status(status);
             return NULL;
         }
         
     } else {
         if( fits_write_col(self->fits, fits_dtype, colnum, firstrow, firstelem, nelem, data, &status)) {
-            Py_DECREF(array);
+		  //Py_DECREF(array);
             set_ioerr_string_from_status(status);
             return NULL;
         }
     }
-    Py_DECREF(array);
+    //Py_DECREF(array);
 
     // this is a full file close and reopen
     if (fits_flush_file(self->fits, &status)) {
@@ -1435,6 +1435,7 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
     PyObject* colnum_list=NULL;
     PyObject* array_list=NULL;
     PyObject *tmp_array=NULL, *tmp_obj=NULL;
+	PyObject *orig_tmp_array;
 
     Py_ssize_t ncols=0;
 
@@ -1448,6 +1449,7 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
     int *fits_dtypes=NULL;
     int *is_string=NULL, *colnums=NULL;
     void **array_ptrs=NULL;
+	void **orig_array_ptrs=NULL;
 
     npy_intp ndim=0, *dims=NULL;
     Py_ssize_t irow=0, icol=0, j=0;;
@@ -1492,11 +1494,13 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
     is_string = calloc(ncols, sizeof(int));
     colnums = calloc(ncols, sizeof(int));
     array_ptrs = calloc(ncols, sizeof(void*));
+    orig_array_ptrs = calloc(ncols, sizeof(void*));
     nperrow = calloc(ncols, sizeof(LONGLONG));
     fits_dtypes = calloc(ncols, sizeof(int));
     for (icol=0; icol<ncols; icol++) {
         PyArray_Descr* dtype;
         tmp_array = PyList_GetItem(array_list, icol);
+        orig_tmp_array = tmp_array;
         npy_dtype = PyArray_TYPE(tmp_array);
         fits_dtypes[icol] = npy_to_fits_table_type(npy_dtype);
         if (fits_dtypes[icol] == -9999) {
@@ -1504,18 +1508,24 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
             goto _fitsio_pywrap_write_columns_bail;
         }
 
+		printf("Original array: %p, refcount %i\n", tmp_array, PyArray_REFCOUNT(tmp_array));
         dtype = PyArray_DESCR(tmp_array);
+		Py_INCREF(dtype);
+		printf("  dtype refcount: %i\n", PyArray_REFCOUNT(dtype));
         tmp_array = PyArray_FromAny(tmp_array, dtype, 0, 0,
                                     NPY_C_CONTIGUOUS, NULL);
+		printf("FromAny array: %p, refcount %i\n", tmp_array, PyArray_REFCOUNT(tmp_array));
+		printf("  dtype refcount: %i\n", PyArray_REFCOUNT(dtype));
 
         if (fits_dtypes[icol]==TSTRING) {
             is_string[icol] = 1;
+			printf("is_string[%i] = 1\n", icol);
         }
         ndim = PyArray_NDIM(tmp_array);
         dims = PyArray_DIMS(tmp_array);
         if (icol==0) {
             nelem = dims[0];
-            //fprintf(stderr,"nelem: %ld\n", (long)nelem);
+            printf("nelem: %ld\n", (long)nelem);
         } else {
             if (dims[0] != nelem) {
                 PyErr_Format(PyExc_ValueError,
@@ -1532,6 +1542,7 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
         tmp_obj = PyList_GetItem(colnum_list,icol);
         colnums[icol] = 1+(int) PyInt_AsLong(tmp_obj);
         array_ptrs[icol] = tmp_array;
+        orig_array_ptrs[icol] = orig_tmp_array;
 
         nperrow[icol] = 1;
         for (j=1; j<ndim; j++) {
@@ -1618,10 +1629,17 @@ _fitsio_pywrap_write_columns_bail:
     free(colnums); colnums=NULL;
 	if (array_ptrs) {
 	  for (icol=0; icol<ncols; icol++) {
+		printf("Freeing: FromAny array %p, refcount %i\n", array_ptrs[icol],
+			   PyArray_REFCOUNT(array_ptrs[icol]));
+		printf("  dtype refcount: %i\n", PyArray_REFCOUNT(PyArray_DESCR(array_ptrs[icol])));
 		Py_XDECREF(array_ptrs[icol]);
+		printf("Freeing: original array %p, refcount %i\n", orig_array_ptrs[icol],
+			   PyArray_REFCOUNT(orig_array_ptrs[icol]));
+		printf("  dtype refcount: %i\n", PyArray_REFCOUNT(PyArray_DESCR(orig_array_ptrs[icol])));
 	  }
 	}
     free(array_ptrs); array_ptrs=NULL;
+	free(orig_array_ptrs); orig_array_ptrs=NULL;
     free(nperrow); nperrow=NULL;
     free(fits_dtypes); fits_dtypes=NULL;
     if (status != 0) {
