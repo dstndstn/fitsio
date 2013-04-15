@@ -1357,6 +1357,7 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
     LONGLONG firstrow=1;
     LONGLONG firstelem=1;
     LONGLONG nelem=0;
+	PyArray_Descr* dtype;
     int npy_dtype=0;
     int fits_dtype=0;
 
@@ -1389,6 +1390,9 @@ PyFITSObject_write_column(struct PyFITSObject* self, PyObject* args, PyObject* k
     if (fits_dtype == -9999) {
         return NULL;
     }
+
+	dtype = PyArray_DESCR(array);
+	array = PyArray_FromAny(array, dtype, 0, 0, NPY_C_CONTIGUOUS, NULL);
 
     data = PyArray_DATA(array);
     nelem = PyArray_SIZE(array);
@@ -1488,6 +1492,7 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
     nperrow = calloc(ncols, sizeof(LONGLONG));
     fits_dtypes = calloc(ncols, sizeof(int));
     for (icol=0; icol<ncols; icol++) {
+        PyArray_Descr* dtype;
         tmp_array = PyList_GetItem(array_list, icol);
         npy_dtype = PyArray_TYPE(tmp_array);
         fits_dtypes[icol] = npy_to_fits_table_type(npy_dtype);
@@ -1495,6 +1500,10 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
             status=1;
             goto _fitsio_pywrap_write_columns_bail;
         }
+
+        dtype = PyArray_DESCR(tmp_array);
+        tmp_array = PyArray_FromAny(tmp_array, dtype, 0, 0,
+                                    NPY_C_CONTIGUOUS, NULL);
 
         if (fits_dtypes[icol]==TSTRING) {
             is_string[icol] = 1;
@@ -1604,6 +1613,11 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
 _fitsio_pywrap_write_columns_bail:
     free(is_string); is_string=NULL;
     free(colnums); colnums=NULL;
+	if (array_ptrs) {
+	  for (icol=0; icol<ncols; icol++) {
+		Py_XDECREF(array_ptrs[icol]);
+	  }
+	}
     free(array_ptrs); array_ptrs=NULL;
     free(nperrow); nperrow=NULL;
     free(fits_dtypes); fits_dtypes=NULL;
