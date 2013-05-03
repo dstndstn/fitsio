@@ -13,6 +13,7 @@ New Features
                 ....
     - added get_exttype() to the FITSHDU class
         'BINARY_TBL' 'ASCII_TBL' 'IMAGE_HDU'
+    - added get_nrows() for binary tables
     - added get_colnames()
     - added get_filename()
     - added get_info()
@@ -34,6 +35,7 @@ Backwards incompatible changes
 
 Bug Fixes
     - newer numpys (1.6.2) were barfing adding a python float to u4 arrays.
+    - Give a more clear error message for malformed TDIM header keywords
 
 version 0.9.2
 --------------------------

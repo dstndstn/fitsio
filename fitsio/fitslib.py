@@ -55,6 +55,7 @@ def read(filename, ext=None, extver=None, **keys):
     By default, all data are read.  For tables, send columns= and rows= to
     select subsets of the data.  Table data are read into a recarray; use a
     FITS object and read_column() to get a single column as an ordinary array.
+    For images, create a FITS object and use slice notation to read subsets.
 
     Under the hood, a FITS object is constructed and data are read using
     an associated FITSHDU object.
@@ -156,7 +157,9 @@ def _make_item(ext, extver=None):
 
 
 
-def write(filename, data, extname=None, extver=None, units=None, compress=None, table_type='binary', header=None, clobber=False, **keys):
+def write(filename, data, extname=None, extver=None, units=None, 
+          compress=None, table_type='binary', header=None, 
+          clobber=False, **keys):
     """
     Convenience function to create a new HDU and write the data.
 
@@ -1068,6 +1071,16 @@ class FITSHDU:
             name=_hdu_type_map[self._info['hdutype']]
             return name
 
+    def get_nrows(self):
+        """
+        Get number of rows in a binary table.
+        """
+        if self._info['hdutype'] == IMAGE_HDU:
+            raise ValueError("Can't get nrows for an image HDU")
+        if 'nrows' not in self._info:
+            raise ValueError("nrows not in info table; this is a bug")
+        return self._info['nrows']
+
     def get_colname(self, colnum):
         """
         Get the name associated with the given column number
@@ -1308,6 +1321,7 @@ class FITSHDU:
         slow = keys.get('slow',False)
         #slow = keys.get('slow',True)
 
+        isrec=False
         if isinstance(data,(list,dict)):
             if isinstance(data,list):
                 data_list=data
@@ -1336,6 +1350,7 @@ class FITSHDU:
                                  "write_column to write to a single column, "
                                  "or instead write to an image hdu")
 
+            isrec=True
             names=data.dtype.names
             # only write object types (variable-length columns) after
             # writing the main table
@@ -1359,7 +1374,12 @@ class FITSHDU:
             for i in xrange(len(data_list)):
                 if not isobj[i]:
                     nonobj_colnums.append(colnums_all[i])
-                    nonobj_arrays.append( array_to_native(data_list[i],inplace=False) )
+                    if isrec:
+                        # this still leaves possibility of f-order sub-arrays..
+                        colref=array_to_native(data_list[i],inplace=False)
+                    else:
+                        colref=array_to_native_c(data_list[i],inplace=False)
+                    nonobj_arrays.append(colref)
 
             if len(nonobj_arrays) > 0:
                 firstrow=keys.get('firstrow',0)
@@ -2486,7 +2506,7 @@ class FITSHDU:
                     descr=(name,npy_type,max_size)
         else:
             tdim = self._info['colinfo'][colnum]['tdim']
-            shape = tdim2shape(tdim, is_string=(npy_type[0] == 'S'))
+            shape = tdim2shape(tdim, name, is_string=(npy_type[0] == 'S'))
             if shape is not None:
                 descr=(name,npy_type,shape)
             else:
@@ -2524,6 +2544,7 @@ class FITSHDU:
         # basic datatype
         npy_type,isvar = self._get_tbl_numpy_dtype(colnum)
         info = self._info['colinfo'][colnum]
+        name = info['name']
 
         if rows is None:
             nrows = self._info['nrows']
@@ -2533,7 +2554,7 @@ class FITSHDU:
         shape = None
         tdim = info['tdim']
 
-        shape = tdim2shape(tdim, is_string=(npy_type[0] == 'S'))
+        shape = tdim2shape(tdim, name, is_string=(npy_type[0] == 'S'))
         if shape is not None:
             if nrows > 1:
                 if not isinstance(shape,tuple):
@@ -2665,9 +2686,9 @@ class FITSHDU:
 
                 if self._info['ndims'] != 0:
                     dimstr = [str(d) for d in self._info['dims']]
+                    dimstr = ",".join(dimstr)
                 else:
                     dimstr=''
-                dimstr = ",".join(dimstr)
 
                 dt = _image_bitpix2npy[self._info['img_equiv_type']]
                 text.append("%sdata type: %s" % (cspacing,dt))
@@ -2699,17 +2720,7 @@ class FITSHDU:
                     else:
                         dimstr = 'varray[%s]' % extract_vararray_max(tform)
                 else:
-                    tdim = c['tdim']
-                    dimstr=''
-                    if dt[0] == 'S':
-                        if len(tdim) > 1:
-                            dimstr = [str(d) for d in tdim[1:]]
-                    else:
-                        if len(tdim) > 1 or tdim[0] > 1:
-                            dimstr = [str(d) for d in tdim]
-                    if dimstr != '':
-                        dimstr = ','.join(dimstr)
-                        dimstr = 'array[%s]' % dimstr
+                    dimstr = _get_col_dimstr(c['tdim'])
 
                 s = f % (c['name'],dt,dimstr)
                 text.append(s)
@@ -2718,8 +2729,26 @@ class FITSHDU:
         return text
 
 
+def _get_col_dimstr(tdim):
+    """
+    not for variable length
+    """
+    dimstr=''
+    if tdim is None:
+        dimstr='array[bad TDIM]'
+    else:
+        #if dt[0] == 'S':
+        if tdim[0] == 'S':
+            if len(tdim) > 1:
+                dimstr = [str(d) for d in tdim[1:]]
+        else:
+            if len(tdim) > 1 or tdim[0] > 1:
+                dimstr = [str(d) for d in tdim]
+        if dimstr != '':
+            dimstr = ','.join(dimstr)
+            dimstr = 'array[%s]' % dimstr
 
-
+    return dimstr
 
 class FITSHDUColumnSubset(object):
     """
@@ -2803,8 +2832,6 @@ class FITSHDUColumnSubset(object):
         text.append('%srows: %d' % (spacing,info['nrows']))
         text.append("%scolumn subset:" %  spacing)
 
-
-
         cspacing = ' '*4
         nspace = 4
         nname = 15
@@ -2830,17 +2857,7 @@ class FITSHDUColumnSubset(object):
                 else:
                     dimstr = 'varray[%s]' % extract_vararray_max(tform)
             else:
-                tdim = c['tdim']
-                dimstr=''
-                if dt[0] == 'S':
-                    if len(tdim) > 1:
-                        dimstr = [str(d) for d in tdim[1:]]
-                else:
-                    if len(tdim) > 1 or tdim[0] > 1:
-                        dimstr = [str(d) for d in tdim]
-                if dimstr != '':
-                    dimstr = ','.join(dimstr)
-                    dimstr = 'array[%s]' % dimstr
+                dimstr = _get_col_dimstr(c['tdim'])
 
             s = f % (c['name'],dt,dimstr)
             text.append(s)
@@ -2897,8 +2914,11 @@ def extract_filename(filename):
     filename = os.path.expanduser(filename)
     return filename
 
-def tdim2shape(tdim, is_string=False):
+def tdim2shape(tdim, name, is_string=False):
     shape=None
+    if tdim is None:
+        raise ValueError("field '%s' has malformed TDIM" % name)
+
     if len(tdim) > 1 or tdim[0] > 1:
         if is_string:
             shape = list( reversed(tdim[1:]) )
@@ -3475,6 +3495,12 @@ def is_object(arr):
     else:
         return False
 
+def array_to_native_c(array_in, inplace=False):
+    # copy only made if not C order
+    arr=numpy.array(array_in, order='C', copy=False)
+    return array_to_native(arr, inplace=inplace)
+
+ 
 def array_to_native(array, inplace=False):
     if numpy.little_endian:
         machine_little=True
