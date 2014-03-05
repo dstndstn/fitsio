@@ -1683,6 +1683,7 @@ class FITSHDU:
 
             array = numpy.zeros(shape, dtype=npy_type)
 
+            # print 'Read column: array', array.dtype
             self._FITS.read_column(self._ext+1,colnum+1, array, rows)
             
             self._rescale_array(array, 
@@ -1758,6 +1759,8 @@ class FITSHDU:
 
         dtype, offsets, isvar = self.get_rec_dtype(**keys)
 
+        #print 'read_all: dtype:', dtype
+
         w,=numpy.where(isvar == True)
         if w.size > 0:
             vstorage = keys.get('vstorage',self._vstorage)
@@ -1776,6 +1779,10 @@ class FITSHDU:
                 self._rescale_array(array[name], 
                                     self._info['colinfo'][colnum]['tscale'], 
                                     self._info['colinfo'][colnum]['tzero'])
+                # cfitsio reads as characters 'T' and 'F' -- convert to real boolean
+                if array[name].dtype == numpy.bool:
+                    array[name] = (array[name].astype(numpy.int8) == ord('T'))
+					
         lower=keys.get('lower',False)
         upper=keys.get('upper',False)
         if self.lower or lower:
@@ -3623,7 +3630,7 @@ _hdu_type_map = {IMAGE_HDU:'IMAGE_HDU',
 # no support yet for complex
 _table_fits2npy = {11:'u1',
                    12: 'i1',
-                   14: 'i1', # logical. Note pyfits uses this for i1, cfitsio casts to char*
+                   14: 'b1', # logical. Note pyfits uses this for i1, cfitsio casts to char*
                    16: 'S',
                    20: 'u2',
                    21: 'i2',
@@ -3646,6 +3653,7 @@ _table_fits2npy_ascii = {16: 'S',
 
 # for TFORM
 _table_npy2fits_form = {'u1':'B',
+                        'b1':'L',
                         'i1':'S', # gets converted to unsigned
                         'S' :'A',
                         'u2':'U', # gets converted to signed

@@ -614,6 +614,8 @@ npy_to_fits_table_type(int npy_dtype) {
 
     char mess[255];
     switch (npy_dtype) {
+	case NPY_BOOL:
+	  return TLOGICAL;
         case NPY_UINT8:
             return TBYTE;
         case NPY_INT8:
@@ -1505,7 +1507,7 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
         }
 
         dtype = PyArray_DESCR(tmp_array);
-		Py_INCREF(dtype);
+        Py_INCREF(dtype);
         tmp_array = PyArray_FromAny(tmp_array, dtype, 0, 0,
                                     NPY_C_CONTIGUOUS, NULL);
 
@@ -1516,7 +1518,7 @@ PyFITSObject_write_columns(struct PyFITSObject* self, PyObject* args, PyObject* 
         dims = PyArray_DIMS(tmp_array);
         if (icol==0) {
             nelem = dims[0];
-            //fprintf(stderr, "nelem: %ld\n", (long)nelem);
+            //fprintf(stderr,"nelem: %ld\n", (long)nelem);
         } else {
             if (dims[0] != nelem) {
                 PyErr_Format(PyExc_ValueError,
@@ -2243,6 +2245,7 @@ PyFITSObject_read_column(struct PyFITSObject* self, PyObject* args) {
         npy_intp nrows=0;
         npy_int64* rows=NULL;
         npy_intp stride=PyArray_STRIDE(array,0);
+
         if (rowsObj == Py_None) {
             nrows = hdu->numrows;
         } else {
@@ -2253,6 +2256,21 @@ PyFITSObject_read_column(struct PyFITSObject* self, PyObject* args) {
             set_ioerr_string_from_status(status);
             return NULL;
         }
+
+		/*
+		if (PyArray_ISBOOL(array)) {
+		  printf("Boolean array -- converting data\n");
+		  // cfitsio reads as char 'T'/'F' -- convert data array to 0/1.
+		  npy_intp i;
+		  npy_int8* bdata = (npy_int8*)data;
+		  for (i=0; i<nrows; i++) {
+			printf("0x%x ", bdata[stride*i]);
+			bdata[stride * i] = ((char)(bdata[stride * i]) == 'T') ? 1 : 0;
+		  }
+		  printf("\n");
+		}
+		*/
+		  
     }
     Py_RETURN_NONE;
 }
