@@ -654,40 +654,39 @@ int file_is_compressed(char *filename) /* I - FITS file name          */
       strcat(filename,".gz");
       if (file_openfile(filename, 0, &diskfile))
       {
-          // BZIP
-      strcpy(tmpfilename,filename);
-      strcat(filename,".bz2");
-      if (file_openfile(filename, 0, &diskfile))
-      {
-        strcpy(filename, tmpfilename);
-        strcat(filename,".Z");
+        strcpy(tmpfilename,filename);
+        strcat(filename,".bz2");
         if (file_openfile(filename, 0, &diskfile))
         {
           strcpy(filename, tmpfilename);
-          strcat(filename,".z");   /* it's often lower case on CDROMs */
+          strcat(filename,".Z");
           if (file_openfile(filename, 0, &diskfile))
           {
             strcpy(filename, tmpfilename);
-            strcat(filename,".zip");
+            strcat(filename,".z");   /* it's often lower case on CDROMs */
             if (file_openfile(filename, 0, &diskfile))
             {
               strcpy(filename, tmpfilename);
-              strcat(filename,"-z");      /* VMS suffix */
+              strcat(filename,".zip");
               if (file_openfile(filename, 0, &diskfile))
               {
                 strcpy(filename, tmpfilename);
-                strcat(filename,"-gz");    /* VMS suffix */
+                strcat(filename,"-z");      /* VMS suffix */
                 if (file_openfile(filename, 0, &diskfile))
                 {
-                  strcpy(filename,tmpfilename);  /* restore original name */
-                  return(0);    /* file not found */
+                  strcpy(filename, tmpfilename);
+                  strcat(filename,"-gz");    /* VMS suffix */
+                  if (file_openfile(filename, 0, &diskfile))
+                  {
+                    strcpy(filename,tmpfilename);  /* restore original name */
+                    return(0);    /* file not found */
+                  }
                 }
               }
             }
           }
         }
       }
-    }
     }
 
     if (fread(buffer, 1, 2, diskfile) != 2)  /* read 2 bytes */
