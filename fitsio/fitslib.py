@@ -25,7 +25,6 @@ import sys, os
 import numpy
 import copy
 import warnings
-import pprint
 
 from . import _fitsio_wrap
 from .util import FITSRuntimeWarning, cfitsio_version
@@ -521,15 +520,17 @@ class FITS(object):
         The File must be opened READWRITE
         """
 
-        self.create_image_hdu(img, extname=extname, extver=extver,
+        self.create_image_hdu(img, 
+                              header=header,
+                              extname=extname, extver=extver,
                               compress=compress, tile_dims=tile_dims)
 
         if header is not None:
             self[-1].write_keys(header)
             self[-1]._update_info()
 
-        if img is not None:
-            self[-1].write(img)
+        #if img is not None:
+        #    self[-1].write(img)
 
 
     def create_image_hdu(self,
@@ -539,13 +540,16 @@ class FITS(object):
                          extname=None,
                          extver=None,
                          compress=None,
-                         tile_dims=None):
+                         tile_dims=None,
+                         header=None):
         """
         Create a new, empty image HDU and reload the hdu list.  Either
         create from an input image or from input dims and dtype
 
             fits.create_image_hdu(image, ...)
             fits.create_image_hdu(dims=dims, dtype=dtype)
+
+        If an image is sent, the data are also written.
 
         You can write data into the new extension using
             fits[extension].write(image)
@@ -557,12 +561,13 @@ class FITS(object):
             fits.write_image(image)
 
         which will create the new image extension for you with the appropriate
-        structure.
+        structure, and write the data.
 
         parameters
         ----------
         img: ndarray, optional
-            An image with which to determine the properties of the HDU
+            An image with which to determine the properties of the HDU. The
+            data will be written.
         dims: sequence, optional
             A sequence describing the dimensions of the image to be created
             on disk.  You must also send a dtype=
@@ -589,13 +594,8 @@ class FITS(object):
             (case-insensitive) See the cfitsio manual for details.
 
         header: FITSHDR, list, dict, optional
-            A set of header keys to write. Can be one of these:
-                - FITSHDR object
-                - list of dictionaries containing 'name','value' and optionally
-                  a 'comment' field.
-                - a dictionary of keyword-value pairs; no comments are written
-                  in this case, and the order is arbitrary
-            Note required keywords such as NAXIS, XTENSION, etc are cleaed out.
+            This is only used to determine how many slots to reserve for
+            header keywords
 
 
         restrictions
@@ -615,6 +615,15 @@ class FITS(object):
                 dtstr = img.dtype.descr[0][1][1:]
                 if img.size == 0:
                     raise ValueError("data must have at least 1 row")
+
+                # data must be c-contiguous and native byte order
+                if not img.flags['C_CONTIGUOUS']:
+                    # this always makes a copy
+                    img2send = numpy.ascontiguousarray(img)
+                    array_to_native(img2send, inplace=True)
+                else:
+                    img2send = array_to_native(img, inplace=False)
+
             else:
                 self._ensure_empty_image_ok()
                 compress=None
@@ -655,7 +664,13 @@ class FITS(object):
         if img2send is not None:
             check_comptype_img(comptype, dtstr)
 
+        if header is not None:
+            nkeys=len(header)
+        else:
+            nkeys=0
+
         self._FITS.create_image_hdu(img2send,
+                                    nkeys,
                                     dims=dims2send,
                                     comptype=comptype, 
                                     tile_dims=tile_dims,
@@ -714,7 +729,7 @@ class FITS(object):
         header: FITSHDR, list, dict, optional
             A set of header keys to write. The keys are written before the data
             is written to the table, preventing a resizing of the table area.
-            
+
             Can be one of these:
                 - FITSHDR object
                 - list of dictionaries containing 'name','value' and optionally
@@ -736,6 +751,7 @@ class FITS(object):
         """
 
         self.create_table_hdu(data=data, 
+                              header=header,
                               names=names,
                               units=units, 
                               extname=extname,
@@ -749,6 +765,7 @@ class FITS(object):
         self[-1].write(data,names=names)
 
     def create_table_hdu(self, data=None, dtype=None, 
+                         header=None,
                          names=None, formats=None,
                          units=None, dims=None, extname=None, extver=None, 
                          table_type='binary'):
@@ -815,6 +832,11 @@ class FITS(object):
             be an integer > 0.  If extver is not sent, the first one will be
             selected.  If ext is an integer, the extver is ignored.
 
+        header: FITSHDR, list, dict, optional
+            This is only used to determine how many slots to reserve for
+            header keywords
+
+
         restrictions
         ------------
         The File must be opened READWRITE
@@ -866,8 +888,13 @@ class FITS(object):
             # will be ignored
             extname=""
 
+        if header is not None:
+            nkeys=len(header)
+        else:
+            nkeys=0
+
         # note we can create extname in the c code for tables, but not images
-        self._FITS.create_table_hdu(table_type_int,
+        self._FITS.create_table_hdu(table_type_int, nkeys,
                                     names, formats, tunit=units, tdim=dims, 
                                     extname=extname, extver=extver)
 
@@ -1299,7 +1326,8 @@ class HDUBase(object):
             hdr = FITSHDR(records_in)
 
         if clean:
-            hdr.clean()
+            is_table = isinstance(self, TableHDU)
+            hdr.clean(is_table=is_table)
 
         for r in hdr.records():
             name=r['name'].upper()
@@ -1813,6 +1841,13 @@ class TableHDU(HDUBase):
             be 'fixed' or 'object'.  See docs on fitsio.FITS for details.
         """
 
+        res = self.read_columns([col], **keys)
+        colname = res.dtype.names[0]
+        return res[colname]
+
+        '''
+        # deprecated
+
         rows=keys.get('rows',None)
         colnum = self._extract_colnum(col)
         # ensures unique, contiguous
@@ -1833,6 +1868,7 @@ class TableHDU(HDUBase):
                                             self._info['colinfo'][colnum]['tzero'])
 
         return array
+        '''
 
     def read_rows(self, rows, **keys):
         """
@@ -3122,18 +3158,36 @@ class TableColumnSubset(object):
         Input is the SFile instance and a list of column names.
         """
 
-        self.fitshdu = fitshdu 
         self.columns = columns
+        if isinstance(columns,(basestring,int,long)):
+            # this is to check if it exists
+            self.colnums = [fitshdu._extract_colnum(columns)]
+
+            self.is_scalar=True
+            self.columns_list = [columns]
+        else:
+            # this is to check if it exists
+            self.colnums = fitshdu._extract_colnums(columns)
+
+            self.is_scalar=False
+            self.columns_list = columns
+
+        self.fitshdu = fitshdu 
 
     def read(self, **keys):
         """
         Read the data from disk and return as a numpy array
         """
 
-        c=keys.get('columns',None)
-        if c is None:
-            keys['columns'] = self.columns
-        return self.fitshdu.read(**keys)
+        if self.is_scalar:
+            data = self.fitshdu.read_column(self.columns, **keys)
+        else:
+            c=keys.get('columns',None)
+            if c is None:
+                keys['columns'] = self.columns
+            data = self.fitshdu.read(**keys)
+
+        return data
 
     def __getitem__(self, arg):
         """
@@ -3167,6 +3221,7 @@ class TableColumnSubset(object):
 
         hdu = self.fitshdu
         info = self.fitshdu._info
+        colinfo = info['colinfo']
 
         text = []
         text.append("%sfile: %s" % (spacing,hdu._filename))
@@ -3182,38 +3237,29 @@ class TableColumnSubset(object):
         format = cspacing + "%-" + str(nname) + "s %" + str(ntype) + "s  %s"
         pformat = cspacing + "%-" + str(nname) + "s\n %" + str(nspace+nname+ntype) + "s  %s"
 
-        for colnum,c in enumerate(info['colinfo']):
-            if c['name'] not in self.columns:
-                continue
+        for colnum in self.colnums:
+            cinfo = colinfo[colnum]
 
-            if len(c['name']) > nname:
+            if len(cinfo['name']) > nname:
                 f = pformat
             else:
                 f = format
 
             dt,isvar = hdu._get_tbl_numpy_dtype(colnum, include_endianness=False)
             if isvar:
-                tform = info['colinfo'][colnum]['tform']
+                tform = cinfo['tform']
                 if dt[0] == 'S':
                     dt = 'S0'
                     dimstr='vstring[%d]' % extract_vararray_max(tform)
                 else:
                     dimstr = 'varray[%s]' % extract_vararray_max(tform)
             else:
-                dimstr = _get_col_dimstr(c['tdim'])
+                dimstr = _get_col_dimstr(cinfo['tdim'])
 
-            s = f % (c['name'],dt,dimstr)
+            s = f % (cinfo['name'],dt,dimstr)
             text.append(s)
 
 
-
-
-        """
-        c=pprint.pformat(self.columns, indent=4)
-        c = c.split('\n')
-        for r in c:
-            text.append('%s%s' % (cspacing, r))
-        """
         s = "\n".join(text)
         return s
 
@@ -3251,6 +3297,7 @@ def check_extver(extver):
     return extver
 
 def extract_filename(filename):
+    filename=filename.strip()
     if filename[0] == "!":
         filename=filename[1:]
     filename = os.path.expandvars(filename)
@@ -3740,23 +3787,35 @@ class FITSHDR(object):
                 del self._record_map[name]
                 self._record_list = [r for r in self._record_list if r['name'] != name]
 
-    def clean(self):
+    def clean(self, is_table=False):
         """
         Remove reserved keywords from the header.
-        
+
         These are keywords that the fits writer must write in order
         to maintain consistency between header and data.
+
+        keywords
+        --------
+        is_table: bool, optional
+            Set True if this is a table, so extra keywords will be cleaned
         """
 
         rmnames = ['SIMPLE','EXTEND','XTENSION','BITPIX','PCOUNT','GCOUNT',
                    'THEAP',
                    'EXTNAME',
-                   'BUNIT','BSCALE','BZERO','BLANK',
+                   'BLANK',
                    'ZQUANTIZ','ZDITHER0','ZIMAGE','ZCMPTYPE',
                    'ZSIMPLE','ZTENSION','ZPCOUNT','ZGCOUNT',
                    'ZBITPIX','ZEXTEND',
                    #'FZTILELN','FZALGOR',
                    'CHECKSUM','DATASUM']
+
+        if is_table:
+            # these are not allowed in tables
+            rmnames += [
+                'BUNIT','BSCALE','BZERO',
+            ]
+
         self.delete(rmnames)
 
         r = self._record_map.get('NAXIS',None)
@@ -4189,7 +4248,9 @@ def check_comptype_img(comptype, dtype_str):
     if comptype == PLIO_1:
         # no unsigned for plio
         if dtype_str[0] == 'u':
-            raise ValueError("unsigned integers not allowed when using PLIO tile compression")
+            raise ValueError("unsigned integers currently not "
+                             "allowed when writing using PLIO "
+                             "tile compression")
 
 def isstring(arg):
     return isinstance(arg, (str,unicode))

@@ -1,5 +1,14 @@
 A python library to read from and write to FITS files.
 
+![](https://travis-ci.org/esheldon/fitsio.svg)
+
+Do not use numpy 1.10.0 or 1.10.1
+----------------------------------
+There is a serious performance regression in numpy 1.10 that results
+in fitsio running tens to hundreds of times slower.  A fix may be
+forthcoming in a later release.  Please comment here if this
+has already impacted your work https://github.com/numpy/numpy/issues/6467
+
 Description
 -----------
 
@@ -24,7 +33,7 @@ Some Features
 - Query the columns and rows in a table.
 - Read and write header keywords.
 - Read and write images in tile-compressed format (RICE,GZIP,PLIO,HCOMPRESS).  
-- Read/write gzip files directly.  Read unix compress files (.Z,.zip).
+- Read/write gzip files directly.  Read unix compress (.Z,.zip) and bzip2 (.bz2) files.
 - TDIM information is used to return array columns in the correct shape.
 - Write and read string table columns, including array columns of arbitrary
   shape.
@@ -392,6 +401,10 @@ The unit tests should all pass for full support.
 
     import fitsio
     fitsio.test.test()
+
+Some tests may fail if certain libraries are not available, such
+as bzip2.  This failure only implies that bzipped files cannot
+be read, without affecting other functionality.
 
 TODO
 ----

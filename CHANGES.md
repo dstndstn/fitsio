@@ -1,16 +1,48 @@
 version 0.9.8 (not yet released)
 ----------------------------------
 
-New Featurees
+New Features
 
     - added read_scamp_head function to read the .head files output
         by SCAMP and return a FITSHDR object
+    - reserved header space when creating image and table extensions
+        and a header is being written.  This can improve performance
+        substantially, especially on distributed file systems.
+    - When possible write image data at HDU creation.  This can
+        be a big performance improvement, especially on distributed file
+        systems.
+    - Support for reading bzipped FITS files.  (Dustin Lang)
+
+    - Added option to use the system CFITSIO instead of the bundled one,
+        by sending --use-system-fitsio. Strongly recommend only use cfitsio
+        that are as new as the bundled one.  Also note the bundled cfitsio
+        sometimes contains patches that are not yet upstream in an
+        official cfitsio release
+    - Sped up image writing
+    - Added reserving keyword space on HDU creation
+    - proper support for reading unsigned images compressed with PLIO.
+        This is a patch directly on the cfitsio code base.  The same
+        code is in the upstream, but not yet released.
 
 Bug Fixes
 
-    - Fixed broken boolean fields in new versions of numpy (rainwoodman)
-    - removed -iarch in setup.py for mac OS X.  This should
+    - Fixed broken boolean fields in new versions of numpy (rainwoodman) Fixed
+    - bug when image was None (for creating empty first HDU) removed -iarch in
+    - setup.py for mac OS X.  This should
         work for versions Mavericks and Snow Leapard (Christopher Bonnett)
+    - Reading a single string column was failing in some cases, this
+        has been fixed
+    - When creating a TableColumnSubset using [cols], the existence
+        of the columns is checked immediately, rather than waiting for the
+        check in the read()
+    - make sure to convert correct endianness when writing during image HDU
+        creation
+    - Corrected the repr for single column subsets
+    - only clean bzero,bscale,bunit from headers for TableHDU
+
+Dev features
+
+    - added travis ci
 
 version 0.9.7
 ----------------------------------
