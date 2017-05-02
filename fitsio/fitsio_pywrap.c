@@ -533,6 +533,10 @@ PyFITSObject_get_hdu_info(struct PyFITSObject* self, PyObject* args) {
     char hduname[FLEN_VALUE];
     int extver=0, hduver=0;
 
+    long long header_start;
+    long long data_start;
+    long long data_end;
+ 
     if (self->fits == NULL) {
         PyErr_SetString(PyExc_ValueError, "fits file is NULL");
         return NULL;
@@ -590,6 +594,19 @@ PyFITSObject_get_hdu_info(struct PyFITSObject* self, PyObject* args) {
     tstatus=0;
     is_compressed=fits_is_compressed_image(self->fits, &tstatus);
     add_long_to_dict(dict, "is_compressed_image", (long)is_compressed);
+
+
+    // get byte offsets
+    if (0==fits_get_hduaddrll(self->fits, &header_start, &data_start, &data_end, &tstatus)) {
+        add_long_long_to_dict(dict, "header_start", (long)header_start);
+        add_long_long_to_dict(dict, "data_start", (long)data_start);
+        add_long_long_to_dict(dict, "data_end", (long)data_end);
+    } else {
+        add_long_long_to_dict(dict, "header_start", -1);
+        add_long_long_to_dict(dict, "data_start", -1);
+        add_long_long_to_dict(dict, "data_end", -1);
+    }
+ 
 
     int ndims=0;
     int maxdim=CFITSIO_MAX_ARRAY_DIMS;
@@ -1131,7 +1148,8 @@ static int set_compression(fitsfile *fits,
                            PyObject* tile_dims_obj,
                            int *status) {
 
-    npy_int64 *tile_dims_py=NULL, *tile_dims_fits=NULL;
+    npy_int64 *tile_dims_py=NULL;
+    long *tile_dims_fits=NULL;
     npy_intp ndims=0, i=0;
 
     // can be NOCOMPRESS (0)
@@ -1240,11 +1258,11 @@ PyFITSObject_create_image_hdu(struct PyFITSObject* self, PyObject* args, PyObjec
             // get dims from input, which must be of type 'i8'
             // this means we are not writing the array that was input,
             // it is only used to determine the data type
-            npy_intp *tptr=NULL, tmp=0;
+            npy_int64 *tptr=NULL, tmp=0;
             ndims = PyArray_SIZE(dims_obj);
             dims = calloc(ndims,sizeof(long));
             for (i=0; i<ndims; i++) {
-                tptr = (npy_intp *) PyArray_GETPTR1(dims_obj, i);
+                tptr = (npy_int64 *) PyArray_GETPTR1(dims_obj, i);
                 tmp = *tptr;
                 dims[ndims-i-1] = (long) tmp;
             }
@@ -1329,6 +1347,54 @@ create_image_hdu_cleanup:
 }
 
 
+// reshape the image to specified dims
+// the input array must be of type int64
+static PyObject *
+PyFITSObject_reshape_image(struct PyFITSObject* self, PyObject* args) {
+
+    int status=0;
+    int hdunum=0, hdutype=0;
+    PyObject* dims_obj=NULL;
+    LONGLONG dims[CFITSIO_MAX_ARRAY_DIMS]={0};
+    LONGLONG dims_orig[CFITSIO_MAX_ARRAY_DIMS]={0};
+    int ndims=0, ndims_orig=0;
+    npy_int64 dim=0;
+    npy_intp i=0;
+    int bitpix=0, maxdim=CFITSIO_MAX_ARRAY_DIMS;
+
+    if (self->fits == NULL) {
+        PyErr_SetString(PyExc_ValueError, "fits file is NULL");
+        return NULL;
+    }
+
+    if (!PyArg_ParseTuple(args, (char*)"iO", &hdunum, &dims_obj)) {
+        return NULL;
+    }
+
+    if (fits_movabs_hdu(self->fits, hdunum, &hdutype, &status)) {
+        set_ioerr_string_from_status(status);
+        return NULL;
+    }
+ 
+    // existing image params, just to get bitpix
+    if (fits_get_img_paramll(self->fits, maxdim, &bitpix, &ndims_orig, dims_orig, &status)) {
+        set_ioerr_string_from_status(status);
+        return NULL;
+    }
+
+    ndims = PyArray_SIZE(dims_obj);
+    for (i=0; i<ndims; i++) {
+        dim= *(npy_int64 *) PyArray_GETPTR1(dims_obj, i);
+        dims[i] = (LONGLONG) dim;
+    }
+
+    if (fits_resize_imgll(self->fits, bitpix, ndims, dims, &status)) {
+        set_ioerr_string_from_status(status);
+        return NULL;
+    }
+
+    Py_RETURN_NONE;
+}
 
 // write the image to an existing HDU created using create_image_hdu
 // dims are not checked
@@ -2694,7 +2760,7 @@ read_var_string(fitsfile* fits, int colnum, LONGLONG row, LONGLONG nchar, int* s
     void* nulval=0;
     int* anynul=NULL;
 
-    str=calloc(nchar,sizeof(char));
+    str=calloc(nchar+1,sizeof(char));
     if (str == NULL) {
         PyErr_Format(PyExc_MemoryError, 
                      "Could not allocate string of size %lld", nchar);
@@ -3434,6 +3500,70 @@ PyFITSObject_read_image(struct PyFITSObject* self, PyObject* args) {
     Py_RETURN_NONE;
 }
 
+static PyObject *
+PyFITSObject_read_raw(struct PyFITSObject* self, PyObject* args) {
+    if (self->fits == NULL) {
+        PyErr_SetString(PyExc_RuntimeError, "FITS file is NULL");
+        return NULL;
+    }
+    //fitsfile* fits = self->fits;
+    FITSfile* FITS = self->fits->Fptr;
+    int status = 0;
+    char* filedata;
+    LONGLONG sz;
+    LONGLONG io_pos;
+    PyObject *stringobj;
+
+    // Flush (close & reopen HDU) to make everything consistent
+    ffflus(self->fits, &status);
+    if (status) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "Failed to flush FITS file data to disk; CFITSIO code %i",
+                     status);
+        return NULL;
+    }
+    // Allocate buffer for string
+    sz = FITS->filesize;
+    // Create python string object of requested size, unitialized
+    stringobj = PyBytes_FromStringAndSize(NULL, sz);
+    if (!stringobj) {
+        PyErr_Format(PyExc_RuntimeError,
+                     "Failed to allocate python string object to hold FITS file data: %i bytes",
+                     (int)sz);
+        return NULL;
+    }
+    // Grab pointer to the memory buffer of the python string object
+    filedata = PyBytes_AsString(stringobj);
+    if (!filedata) {
+        Py_DECREF(stringobj);
+        return NULL;
+    }
+    // Remember old file position
+    io_pos = FITS->io_pos;
+    // Seek to beginning of file
+    if (ffseek(FITS, 0)) {
+        Py_DECREF(stringobj);
+        PyErr_Format(PyExc_RuntimeError,
+                     "Failed to seek to beginning of FITS file");
+        return NULL;
+    }
+    // Read into filedata
+    if (ffread(FITS, sz, filedata, &status)) {
+        Py_DECREF(stringobj);
+        PyErr_Format(PyExc_RuntimeError,
+                     "Failed to read file data into memory: CFITSIO code %i",
+                     status);
+        return NULL;
+    }
+    // Seek back to where we were
+    if (ffseek(FITS, io_pos)) {
+        Py_DECREF(stringobj);
+        PyErr_Format(PyExc_RuntimeError,
+                     "Failed to seek back to original FITS file position");
+        return NULL;
+    }
+    return stringobj;
+}
 
 static int get_long_slices(PyObject* fpix_arr,
                            PyObject* lpix_arr,
@@ -3443,7 +3573,7 @@ static int get_long_slices(PyObject* fpix_arr,
                            long** step) {
 
     int i=0;
-    long* ptr=NULL;
+    npy_int64* ptr=NULL;
     npy_intp fsize=0, lsize=0, ssize=0;
 
     fsize=PyArray_SIZE(fpix_arr);
@@ -3589,7 +3719,7 @@ PyFITSObject_read_header(struct PyFITSObject* self, PyObject* args) {
         }
 
         dict = PyDict_New();
-        add_string_to_dict(dict,"card",card);
+        add_string_to_dict(dict,"card_string",card);
         add_string_to_dict(dict,"name",keyname);
         add_string_to_dict(dict,"value",value);
         add_string_to_dict(dict,"comment",comment);
@@ -3868,7 +3998,7 @@ static PyMethodDef PyFITSObject_methods[] = {
     {"movnam_hdu",           (PyCFunction)PyFITSObject_movnam_hdu,           METH_VARARGS,  "movnam_hdu\n\nMove to the specified HDU by name and return the hdu number."},
 
     {"get_hdu_info",         (PyCFunction)PyFITSObject_get_hdu_info,         METH_VARARGS,  "get_hdu_info\n\nReturn a dict with info about the specified HDU."},
-
+    {"read_raw",             (PyCFunction)PyFITSObject_read_raw,             METH_NOARGS,  "read_raw\n\nRead the entire raw contents of the FITS file, returning a python string."},
     {"read_image",           (PyCFunction)PyFITSObject_read_image,           METH_VARARGS,  "read_image\n\nRead the entire n-dimensional image array.  No checking of array is done."},
     {"read_image_slice",     (PyCFunction)PyFITSObject_read_image_slice,     METH_VARARGS,  "read_image_slice\n\nRead an image slice."},
     {"read_column",          (PyCFunction)PyFITSObject_read_column,          METH_VARARGS,  "read_column\n\nRead the column into the input array.  No checking of array is done."},
@@ -3886,6 +4016,7 @@ static PyMethodDef PyFITSObject_methods[] = {
     {"write_checksum",       (PyCFunction)PyFITSObject_write_checksum,       METH_VARARGS,  "write_checksum\n\nCompute and write the checksums into the header."},
     {"verify_checksum",      (PyCFunction)PyFITSObject_verify_checksum,      METH_VARARGS,  "verify_checksum\n\nReturn a dict with dataok and hduok."},
 
+    {"reshape_image",          (PyCFunction)PyFITSObject_reshape_image,          METH_VARARGS,  "reshape_image\n\nReshape the image."},
     {"write_image",          (PyCFunction)PyFITSObject_write_image,          METH_VARARGS,  "write_image\n\nWrite the input image to a new extension."},
     {"write_column",         (PyCFunction)PyFITSObject_write_column,         METH_VARARGS | METH_KEYWORDS, "write_column\n\nWrite a column into the specifed hdu."},
     {"write_columns",        (PyCFunction)PyFITSObject_write_columns,        METH_VARARGS | METH_KEYWORDS, "write_columns\n\nWrite columns into the specifed hdu."},

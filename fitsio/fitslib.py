@@ -29,6 +29,14 @@ import warnings
 from . import _fitsio_wrap
 from .util import FITSRuntimeWarning, cfitsio_version
 
+# for python3 compat
+try:
+    xrange=xrange
+except:
+    xrange=range
+
+from functools import reduce
+
 def read(filename, ext=None, extver=None, **keys):
     """
     Convenience function to read data from the specified FITS HDU
@@ -212,9 +220,9 @@ def write(filename, data, extname=None, extver=None, units=None,
         Can be one of these:
             - FITSHDR object
             - list of dictionaries containing 'name','value' and optionally
-              a 'comment' field.
+              a 'comment' field; the order is preserved.
             - a dictionary of keyword-value pairs; no comments are written
-              in this case, and the order is arbitrary
+              in this case, and the order is arbitrary.
         Note required keywords such as NAXIS, XTENSION, etc are cleaed out.
 
     clobber: bool, optional
@@ -434,9 +442,9 @@ class FITS(object):
             A set of header keys to write. Can be one of these:
                 - FITSHDR object
                 - list of dictionaries containing 'name','value' and optionally
-                  a 'comment' field.
+                  a 'comment' field; the order is preserved.
                 - a dictionary of keyword-value pairs; no comments are written
-                  in this case, and the order is arbitrary
+                  in this case, and the order is arbitrary.
             Note required keywords such as NAXIS, XTENSION, etc are cleaed out.
 
         Image-only keywords:
@@ -509,9 +517,9 @@ class FITS(object):
             A set of header keys to write. Can be one of these:
                 - FITSHDR object
                 - list of dictionaries containing 'name','value' and optionally
-                  a 'comment' field.
+                  a 'comment' field; the order is preserved.
                 - a dictionary of keyword-value pairs; no comments are written
-                  in this case, and the order is arbitrary
+                  in this case, and the order is arbitrary.
             Note required keywords such as NAXIS, XTENSION, etc are cleaed out.
 
 
@@ -733,9 +741,9 @@ class FITS(object):
             Can be one of these:
                 - FITSHDR object
                 - list of dictionaries containing 'name','value' and optionally
-                  a 'comment' field.
+                  a 'comment' field; the order is preserved.
                 - a dictionary of keyword-value pairs; no comments are written
-                  in this case, and the order is arbitrary
+                  in this case, and the order is arbitrary.
             Note required keywords such as NAXIS, XTENSION, etc are cleaed out.
 
         restrictions
@@ -764,6 +772,12 @@ class FITS(object):
 
         self[-1].write(data,names=names)
 
+    def read_raw(self):
+        """
+        Reads the raw FITS file contents, returning a Python string.
+        """
+        return self._FITS.read_raw()
+        
     def create_table_hdu(self, data=None, dtype=None, 
                          header=None,
                          names=None, formats=None,
@@ -995,6 +1009,7 @@ class FITS(object):
         hdu=self.hdu_list[self._iter_index]
         self._iter_index += 1
         return hdu
+    __next__=next
 
     def __len__(self):
         """
@@ -1184,6 +1199,31 @@ class HDUBase(object):
             name=_hdu_type_map[self._info['hdutype']]
             return name
 
+    def get_offsets(self):
+        """
+        returns
+        -------
+        a dictionary with these entries
+
+        header_start:
+            byte offset from beginning of the file to the start
+            of the header
+        data_start:
+            byte offset from beginning of the file to the start
+            of the data section
+        data_end:
+            byte offset from beginning of the file to the end
+            of the data section
+
+        Note these are also in the information dictionary, which
+        you can access with get_info()
+        """
+        return dict(
+            header_start=self._info['header_start'],
+            data_start=self._info['data_start'],
+            data_end=self._info['data_end'],
+        )
+
     def get_info(self):
         """
         Get a copy of the internal dictionary holding extension information
@@ -1306,9 +1346,9 @@ class HDUBase(object):
             Can be one of these:
                 - FITSHDR object
                 - list of dictionaries containing 'name','value' and optionally
-                  a 'comment' field.
+                  a 'comment' field; the order is preserved.
                 - a dictionary of keyword-value pairs; no comments are written
-                  in this case, and the order is arbitrary
+                  in this case, and the order is arbitrary.
         clean: boolean
             If True, trim out the standard fits header keywords that are
             created on HDU creation, such as EXTEND, SIMPLE, STTYPE, TFORM,
@@ -1351,7 +1391,6 @@ class HDUBase(object):
         """
         # note converting strings
         return FITSHDR(self.read_header_list(), convert=True)
-
 
     def read_header_list(self):
         """
@@ -1408,6 +1447,8 @@ class TableHDU(HDUBase):
 
         self.lower=keys.get('lower',False)
         self.upper=keys.get('upper',False)
+        self.trim_strings=keys.get('trim_strings',False)
+
         self._vstorage=keys.get('vstorage','fixed')
         self.case_sensitive=keys.get('case_sensitive',False)
         self._iter_row_buffer=keys.get('iter_row_buffer',1)
@@ -1514,7 +1555,7 @@ class TableHDU(HDUBase):
                         raise ValueError("you must send columns with a list of arrays")
 
             else:
-                columns_all=data.keys()
+                columns_all=list(data.keys())
                 data_list=[data[n] for n in columns_all]
 
             colnums_all = [self._extract_colnum(c) for c in columns_all]
@@ -1531,6 +1572,9 @@ class TableHDU(HDUBase):
                                  "to write a simple array, you should use "
                                  "write_column to write to a single column, "
                                  "or instead write to an image hdu")
+
+            if data.shape is ():
+                raise ValueError("cannot write data with shape ()")
 
             isrec=True
             names=data.dtype.names
@@ -1814,6 +1858,7 @@ class TableHDU(HDUBase):
         elif self.upper or upper:
             _names_to_upper_if_recarray(array)
 
+        self._maybe_trim_strings(array, **keys)
         return array
 
     def read_column(self, col, **keys):
@@ -1843,32 +1888,10 @@ class TableHDU(HDUBase):
 
         res = self.read_columns([col], **keys)
         colname = res.dtype.names[0]
-        return res[colname]
+        data = res[colname]
 
-        '''
-        # deprecated
-
-        rows=keys.get('rows',None)
-        colnum = self._extract_colnum(col)
-        # ensures unique, contiguous
-        rows = self._extract_rows(rows)
-
-        if self._info['colinfo'][colnum]['eqtype'] < 0:
-            vstorage=keys.get('vstorage',self._vstorage)
-            return self._read_var_column(colnum, rows, vstorage)
-        else:
-            npy_type, shape = self._get_simple_dtype_and_shape(colnum, rows=rows)
-
-            array = numpy.zeros(shape, dtype=npy_type)
-
-            self._FITS.read_column(self._ext+1,colnum+1, array, rows)
-            
-            array=self._rescale_and_convert(array, 
-                                            self._info['colinfo'][colnum]['tscale'], 
-                                            self._info['colinfo'][colnum]['tzero'])
-
-        return array
-        '''
+        self._maybe_trim_strings(data, **keys)
+        return data
 
     def read_rows(self, rows, **keys):
         """
@@ -1921,6 +1944,7 @@ class TableHDU(HDUBase):
         elif self.upper or upper:
             _names_to_upper_if_recarray(array)
 
+        self._maybe_trim_strings(array, **keys)
 
         return array
 
@@ -2003,6 +2027,8 @@ class TableHDU(HDUBase):
         elif self.upper or upper:
             _names_to_upper_if_recarray(array)
 
+        self._maybe_trim_strings(array, **keys)
+
         return array
 
     def read_slice(self, firstrow, lastrow, step=1, **keys):
@@ -2079,6 +2105,7 @@ class TableHDU(HDUBase):
         elif self.upper or upper:
             _names_to_upper_if_recarray(array)
 
+        self._maybe_trim_strings(array, **keys)
 
 
         return array
@@ -2176,18 +2203,17 @@ class TableHDU(HDUBase):
                 tform = self._info['colinfo'][colnum]['tform']
                 max_size = extract_vararray_max(tform)
 
-                if max_size == 0:
-                    if max_size <= 0:
-                        name=self._info['colinfo'][colnum]['name']
-                        mess='Will read as an object field'
-                        if max_size < 0:
-                            mess="Column '%s': No maximum size: '%s'. %s"
-                            mess=mess % (name,tform,mess)
-                            warnings.warn(mess, FITSRuntimeWarning)
-                        else:
-                            mess="Column '%s': Max size is zero: '%s'. %s"
-                            mess=mess % (name,tform,mess)
-                            warnings.warn(mess, FITSRuntimeWarning)
+                if max_size <= 0:
+                    name=self._info['colinfo'][colnum]['name']
+                    mess='Will read as an object field'
+                    if max_size < 0:
+                        mess="Column '%s': No maximum size: '%s'. %s"
+                        mess=mess % (name,tform,mess)
+                        warnings.warn(mess, FITSRuntimeWarning)
+                    else:
+                        mess="Column '%s': Max size is zero: '%s'. %s"
+                        mess=mess % (name,tform,mess)
+                        warnings.warn(mess, FITSRuntimeWarning)
 
                     # we are forced to read this as an object array
                     return self.get_rec_column_descr(colnum, 'object')
@@ -2276,7 +2302,11 @@ class TableHDU(HDUBase):
                             ncopy = len(item)
 
                             if sys.version_info > (3,0,0):
-                                array[name][irow] = item
+                                ts = array[name].dtype.descr[0][1][1]
+                                if ts != 'S':
+                                    array[name][irow][0:ncopy] = item[:]
+                                else:
+                                    array[name][irow] = item
                             else:
                                 array[name][irow][0:ncopy] = item[:]
 
@@ -2406,6 +2436,15 @@ class TableHDU(HDUBase):
         if zero != 0.0:
             zval=numpy.array(zero,dtype=array.dtype)
             array += zval
+
+    def _maybe_trim_strings(self, array, **keys):
+        """
+        if requested, trim trailing white space from 
+        all string fields in the input array
+        """
+        trim_strings = keys.get('trim_strings',False)
+        if self.trim_strings or trim_strings:
+            _trim_strings(array)
 
     def _convert_bool_array(self, array):
         """
@@ -2567,7 +2606,7 @@ class TableHDU(HDUBase):
         """
         Get the column number for the input column
         """
-        if isinstance(col,(int,long)):
+        if isinteger(col):
             colnum = col
 
             if (colnum < 0) or (colnum > (self._ncol-1)):
@@ -2642,6 +2681,8 @@ class TableHDU(HDUBase):
         elif self.upper:
             _names_to_upper_if_recarray(array)
 
+        self._maybe_trim_strings(array)
+
         return array
 
     def __iter__(self):
@@ -2678,7 +2719,7 @@ class TableHDU(HDUBase):
         efficient buffering.
         """
         return self._get_next_buffered_row()
-
+    __next__=next
 
     def _get_next_buffered_row(self):
         """
@@ -2842,6 +2883,7 @@ class AsciiTableHDU(TableHDU):
         elif self.upper or upper:
             _names_to_upper_if_recarray(array)
 
+        self._maybe_trim_strings(array, **keys)
 
         return array
     read_ascii=read
@@ -2901,11 +2943,27 @@ class ImageHDU(HDUBase):
 
         return dims
 
+    def reshape(self, dims):
+        """
+        reshape an existing image to the requested dimensions
+
+        parameters
+        ----------
+        dims: sequence
+            Any sequence convertible to i8
+        """
+
+        adims = numpy.array(dims, ndmin=1, dtype='i8')
+        self._FITS.reshape_image(self._ext+1, adims)
+
     def write(self, img, start=0, **keys):
         """
         Write the image into this HDU
 
-        If data already exist in this HDU, they will be overwritten.
+        If data already exist in this HDU, they will be overwritten.  If the
+        image to write is larger than the image on disk, or if the start 
+        position is such that the write would extend beyond the existing
+        dimensions, the on-disk image is expanded.
 
         parameters
         ----------
@@ -2916,6 +2974,8 @@ class ImageHDU(HDUBase):
             into the entire array, or a sequence determining where
             in N-dimensional space to start.
         """
+
+        dims=self.get_dims()
 
         if img.dtype.fields is not None:
             raise ValueError("got recarray, expected regular ndarray")
@@ -2934,11 +2994,17 @@ class ImageHDU(HDUBase):
             # convert to scalar offset
             # note we use the on-disk data type to get itemsize
 
-            dims=self.get_dims()
-            start = _convert_full_start_to_offset(dims, start)
+            offset = _convert_full_start_to_offset(dims, start)
+        else:
+            offset = start
 
-        self._FITS.write_image(self._ext+1, img_send, start+1)
+        # see if we need to resize the image
+        if self.has_data():
+            self._expand_if_needed(dims, img.shape, start, offset)
+
+        self._FITS.write_image(self._ext+1, img_send, offset+1)
         self._update_info()
+
 
     def read(self, **keys):
         """
@@ -2983,8 +3049,8 @@ class ImageHDU(HDUBase):
 
     def __getitem__(self, arg):
         """
-        Get data from an image using python [] slice notation.  
-        
+        Get data from an image using python [] slice notation.
+
         e.g., [2:25, 4:45].
         """
         return self._read_image_slice(arg)
@@ -3081,6 +3147,57 @@ class ImageHDU(HDUBase):
         self._FITS.read_image_slice(self._ext+1, first, last, steps, array)
         return array
 
+    def _expand_if_needed(self, dims, write_dims, start, offset):
+        """
+        expand the on-disk image if the indended write will extend
+        beyond the existing dimensions
+        """
+        from operator import mul
+
+        if numpy.isscalar(start):
+            start_is_scalar=True
+        else:
+            start_is_scalar=False
+
+        existing_size=reduce(mul, dims, 1)
+        required_size = offset + reduce(mul, write_dims, 1)
+
+        if required_size > existing_size:
+            print("    required size:",required_size,"existing size:",existing_size)
+            # we need to expand the image
+            ndim=len(dims)
+            idim=len(write_dims)
+
+            if start_is_scalar:
+                if start == 0:
+                    start=[0]*ndim
+                else:
+                    raise ValueError("When expanding "
+                                     "an existing image while writing, the start keyword "
+                                     "must have the same number of dimensions "
+                                     "as the image or be exactly 0, got %s " % start)
+
+            if idim != ndim:
+                raise ValueError("When expanding "
+                                 "an existing image while writing, the input image "
+                                 "must have the same number of dimensions "
+                                 "as the original.  "
+                                 "Got %d instead of %d" % (idim,ndim))
+            new_dims = []
+            for i in xrange(ndim):
+                required_dim = start[i] + write_dims[i]
+
+                if required_dim < dims[i]:
+                    # careful not to shrink the image!
+                    dimsize=dims[i]
+                else:
+                    dimsize=required_dim
+
+                new_dims.append(dimsize)
+
+            print("    reshaping image to:",new_dims)
+            self.reshape(new_dims)
+
     def __repr__(self):
         """
         Representation for ImageHDU
@@ -3159,7 +3276,7 @@ class TableColumnSubset(object):
         """
 
         self.columns = columns
-        if isinstance(columns,(basestring,int,long)):
+        if isstring(columns) or isinteger(columns):
             # this is to check if it exists
             self.colnums = [fitshdu._extract_colnum(columns)]
 
@@ -3351,6 +3468,8 @@ def array2tabledef(data, table_type='binary'):
             # the same type as the first
             name=d[0]
             form, dim = npy_obj2fits(data,name)
+        elif npy_dtype[0] == "V":
+            continue
         else:
             name, form, dim = npy2fits(d,table_type=table_type)
 
@@ -3636,6 +3755,11 @@ class FITSHDR(object):
     ----------
     record_list: optional
         A list of dicts, or dict, or another FITSHDR
+          - list of dictionaries containing 'name','value' and optionally
+            a 'comment' field; the order is preserved.
+          - a dictionary of keyword-value pairs; no comments are written
+            in this case, and the order is arbitrary.
+          - another FITSHDR object; the order is preserved.
     convert: bool, optional
         If True, convert strings.  E.g. '3' gets
         converted to 3 and "'hello'" gets converted
@@ -3668,7 +3792,7 @@ class FITSHDR(object):
 
         # print a single record
         print(hdr['fromdict'])
-        
+
 
         # can also set from a card
         hdr.add_record('test    =                   77')
@@ -3685,7 +3809,7 @@ class FITSHDR(object):
         recs={'day':'saturday',
               'telescope':'blanco'}
         hdr=FITSHDR(recs)
-    
+
     """
     def __init__(self, record_list=None, convert=False):
 
@@ -3863,16 +3987,22 @@ class FITSHDR(object):
         """
         Get the requested header entry by keyword name
         """
-        key=item.upper()
-        if key not in self._record_map:
-            return default_value
 
-        return self._record_map[key]['value']
+        found, name = self._contains_and_name(item)
+        if found:
+            return self._record_map[name]['value']
+        else:
+            return default_value
 
     def __len__(self):
         return len(self._record_list)
 
     def __contains__(self, item):
+        found, _ = self._contains_and_name(item)
+        return found
+
+    def _contains_and_name(self, item):
+
         if isinstance(item, FITSRecord):
             name=item['name']
         elif isinstance(item, dict):
@@ -3882,8 +4012,17 @@ class FITSHDR(object):
         else:
             name=item
         
+        found=False
         name=name.upper()
-        return name in self._record_map
+        if name in self._record_map:
+            found=True
+        elif name[0:8] == 'HIERARCH':
+            if len(name) > 9:
+                name = name[9:]
+                if name in self._record_map:
+                    found=True
+
+        return found, name
 
     def __setitem__(self, item, value):
         if isinstance(value, (dict,FITSRecord)):
@@ -3897,10 +4036,10 @@ class FITSHDR(object):
         self.add_record(rec)
 
     def __getitem__(self, item):
-        key=item.upper()
-        if key not in self._record_map:
+        val = self.get(item,None)
+        if val is None:
             raise ValueError("unknown record: %s" % key)
-        return self._record_map[key]['value']
+        return val
 
     def __iter__(self):
         self._current=0
@@ -3917,6 +4056,7 @@ class FITSHDR(object):
             return key
         else:
             raise StopIteration
+    __next__=next
 
     def _record2card(self, record):
         """
@@ -3943,15 +4083,20 @@ class FITSHDR(object):
         name = record['name']
         value = record['value']
 
+        v_isstring=isstring(value)
 
         if name == 'COMMENT':
             card = 'COMMENT   %s' % value
         elif name=='HISTORY':
             card = 'HISTORY   %s' % value
         else:
-            card = '%-8s= ' % name[0:8]
+            if len(name) > 8:
+                card = 'HIERARCH %s= ' % name
+            else:
+                card = '%-8s= ' % name[0:8]
+
             # these may be string representations of data, or actual strings
-            if isinstance(value,(basestring,unicode)):
+            if v_isstring:
                 value = str(value)
                 if len(value) > 0:
                     if value[0] != "'":
@@ -3971,15 +4116,20 @@ class FITSHDR(object):
             if 'comment' in record:
                 card += ' / %s' % record['comment']
 
-        return card[0:80]
+        if v_isstring and len(card) > 80:
+            card=card[0:79] + "'"
+        else:
+            card=card[0:80]
+
+        return card
 
     def __repr__(self):
         rep=['']
         for r in self._record_list:
-            if 'card' not in r:
+            if 'card_string' not in r:
                 card = self._record2card(r)
             else:
-                card = r['card']
+                card = r['card_string']
 
             rep.append(card)
         return '\n'.join(rep)
@@ -4010,7 +4160,7 @@ class FITSRecord(dict):
     def __init__(self, record, convert=False):
         self.set_record(record, convert=convert)
 
-    def set_record(self, record_in, convert=False):
+    def set_record(self, record, convert=False):
         """
         check the record is valid and convert to a dict
 
@@ -4029,22 +4179,32 @@ class FITSRecord(dict):
         """
         import copy
 
-        if isinstance(record_in, basestring):
-            card=FITSCard(record_in)
+        if isstring(record):
+            card=FITSCard(record)
             self.update(card)
 
             self.verify()
 
         else:
-            if not isinstance(record_in, (FITSRecord,dict)):
+
+            if isinstance(record,FITSRecord):
+                self.update(record)
+            elif isinstance(record,dict):
+                # if the card is present, always construct the record from that
+                if 'card_string' in record:
+                    self.set_record(record['card_string'])
+                else:
+                    # we will need to verify it
+                    self.update(record)
+            else:
                 raise ValueError("record must be a string card or "
                                  "dictionary or FITSRecord")
-            self.update(record_in)
+
             self.verify()
 
             if convert:
                 self['value_orig'] = copy.copy(self['value'])
-                if isinstance(self['value'],basestring):
+                if isstring(self['value']):
                     self['value'] = self._convert_value(self['value_orig'])
 
     def verify(self):
@@ -4064,7 +4224,13 @@ class FITSRecord(dict):
         """
         import ast
         try:
-            value = ast.literal_eval(value_orig)
+            avalue = ast.parse(value_orig).body[0].value
+            if isinstance(avalue,ast.BinOp):
+                # this is probably a string that happens to look like
+                # a binary operation, e.g. '25-3'
+                value = orig_value
+            else:
+                value = ast.literal_eval(value_orig)
         except:
             value = self._convert_quoted_string(value_orig)
         return value
@@ -4119,26 +4285,31 @@ class FITSCard(FITSRecord):
     def set_card(self, card_string):
         self['card_string']=card_string
 
-        self._check_equals()
+        self._check_hierarch()
 
-        self._check_type()
-        self._check_len()
-
-        front=card_string[0:7]
-        if (not self.has_equals() or front=='COMMENT' or front=='HISTORY'):
-
-            if front=='CONTINU':
-                raise ValueError("CONTINUE not supported")
-
-            if front=='HISTORY':
-                self._set_as_history()
-            else:
-                # note anything without an = and not history is
-                # treated as comment; this is built into cfitsio
-                # as well
-                self._set_as_comment()
-        else:
+        if self._is_hierarch:
             self._set_as_key()
+        else:
+            self._check_equals()
+
+            self._check_type()
+            self._check_len()
+
+            front=card_string[0:7]
+            if (not self.has_equals() or front=='COMMENT' or front=='HISTORY'):
+
+                if front=='CONTINU':
+                    raise ValueError("CONTINUE not supported")
+
+                if front=='HISTORY':
+                    self._set_as_history()
+                else:
+                    # note anything without an = and not history is
+                    # treated as comment; this is built into cfitsio
+                    # as well
+                    self._set_as_comment()
+            else:
+                self._set_as_key()
 
     def has_equals(self):
         """
@@ -4146,6 +4317,13 @@ class FITSCard(FITSRecord):
         """
         return self._has_equals
 
+    def _check_hierarch(self):
+        card_string=self['card_string']
+        if card_string[0:8].upper() == 'HIERARCH':
+            self._is_hierarch=True
+        else:
+            self._is_hierarch=False
+        
     def _check_equals(self):
         """
         check for = in position 8, set attribute _has_equals
@@ -4197,14 +4375,15 @@ class FITSCard(FITSRecord):
                 value=''
         else:
             if len(card_string) >= 8:
-                value=card_string[7:]
+                #value=card_string[7:]
+                value=card_string[8:]
             else:
                 value=''
         return value
 
     def _check_type(self):
         card_string=self['card_string']
-        if not isinstance(card_string,basestring):
+        if not isstring(card_string):
             raise TypeError("card must be a string, got type %s" % type(card_string))
 
     def _check_len(self):
@@ -4253,8 +4432,10 @@ def check_comptype_img(comptype, dtype_str):
                              "tile compression")
 
 def isstring(arg):
-    return isinstance(arg, (str,unicode))
+    return isinstance(arg, _stypes)
 
+def isinteger(arg):
+    return isinstance(arg, _itypes)
 
 def fields_are_object(arr):
     isobj=numpy.zeros(len(arr.dtype.names),dtype=numpy.bool)
@@ -4364,6 +4545,18 @@ def _names_to_upper_if_recarray(data):
     if data.dtype.names is not None:
         data.dtype.names = [n.upper() for n in data.dtype.names]
 
+def _trim_strings(data):
+    names=data.dtype.names
+    if names is not None:
+        # run through each field separately
+        for n in names:
+            if data[n].dtype.descr[0][1][1] == 'S':
+                data[n] = numpy.char.rstrip(data[n])
+
+    else:
+        if data.dtype.descr[0][1][1] == 'S':
+            data[:] = numpy.char.rstrip(data[:])
+
 def _convert_full_start_to_offset(dims, start):
     # convert to scalar offset
     # note we use the on-disk data type to get itemsize
@@ -4416,7 +4609,8 @@ _hdu_type_map = {IMAGE_HDU:'IMAGE_HDU',
                  'BINARY_TBL':BINARY_TBL}
 
 # no support yet for complex
-_table_fits2npy = {11: 'u1',
+_table_fits2npy = {#1: 'b1',
+                   11: 'u1',
                    12: 'i1',
                    14: 'b1', # logical. Note pyfits uses this for i1, cfitsio casts to char*
                    16: 'S',
@@ -4484,11 +4678,19 @@ _image_bitpix2npy = {8: 'u1',
                      -64: 'f8'}
 
 # for header keywords
-_stypes = (str,unicode,numpy.string_)
 _ftypes = (float,numpy.float32,numpy.float64)
-_itypes = (int,long,
-          numpy.uint8,numpy.int8,
-          numpy.uint16,numpy.int16,
-          numpy.uint32,numpy.int32,
-          numpy.uint64,numpy.int64)
+
+if sys.version_info > (3,0,0):
+    _itypes=(int,)
+    _stypes = (str,)
+else:
+    _itypes=(int,long)
+    _stypes = (basestring,unicode,)
+
+_itypes += (numpy.uint8,numpy.int8,
+            numpy.uint16,numpy.int16,
+            numpy.uint32,numpy.int32,
+            numpy.uint64,numpy.int64)
+
+_stypes += (numpy.string_,)
 

@@ -13,13 +13,20 @@ if sys.version_info > (3,0,0):
 else:
     stype=str
 
+try:
+    xrange=xrange
+except:
+    xrange=range
 
 def test():
     suite_warnings = unittest.TestLoader().loadTestsFromTestCase(TestWarnings)
-    unittest.TextTestRunner(verbosity=2).run(suite_warnings)
+    res1=unittest.TextTestRunner(verbosity=2).run(suite_warnings).wasSuccessful()
 
     suite = unittest.TestLoader().loadTestsFromTestCase(TestReadWrite)
-    unittest.TextTestRunner(verbosity=2).run(suite)
+    res2=unittest.TextTestRunner(verbosity=2).run(suite).wasSuccessful()
+
+    if not res1 or not res2:
+        sys.exit(1)
 
 class TestWarnings(unittest.TestCase):
     """
@@ -182,7 +189,11 @@ class TestReadWrite(unittest.TestCase):
                 ('f8scalar','f8'),
                 ('Sscalar',Sdtype)]
         nrows=4
-        adata=numpy.zeros(nrows, dtype=adtype)
+        try:
+            tdt = numpy.dtype(adtype, align=True)
+        except TypeError: # older numpy may not understand `align` argument
+            tdt = numpy.dtype(adtype)
+        adata=numpy.zeros(nrows, dtype=tdt)
 
         adata['i2scalar'][:] = -32222  + numpy.arange(nrows,dtype='i2')
         adata['i4scalar'][:] = -1353423423 + numpy.arange(nrows,dtype='i4')
@@ -281,7 +292,36 @@ class TestReadWrite(unittest.TestCase):
 
         self.vardata = data
 
+    def testHeaderWriteRead(self):
+        """
+        Test a basic header write and read
+        """
 
+        fname=tempfile.mktemp(prefix='fitsio-HeaderWrite-',suffix='.fits')
+        try:
+            with fitsio.FITS(fname,'rw',clobber=True) as fits:
+                data=numpy.zeros(10)
+                header={
+                    'x':35,
+                    'y':88.215,
+                    'funky':'35-8', # test old bug when strings look 
+                                    #like expressions
+                    'name':'J. Smith',
+                }
+                fits.write_image(data, header=header)
+
+                rh = fits[0].read_header()
+                self.check_header(header, rh)
+
+            with fitsio.FITS(fname) as fits:
+                rh = fits[0].read_header()
+                self.check_header(header, rh)
+
+        finally:
+            if os.path.exists(fname):
+                pass
+                #os.remove(fname)
+ 
     def testImageWriteRead(self):
         """
         Test a basic image write, data and a header, then reading back in to
@@ -302,12 +342,7 @@ class TestReadWrite(unittest.TestCase):
                     self.compare_array(data, rdata, "images")
 
                     rh = fits[-1].read_header()
-                    for k,v in header.iteritems():
-                        rv = rh[k]
-                        if isinstance(rv,str):
-                            v = v.strip()
-                            rv = rv.strip()
-                        self.assertEqual(v,rv,"testing equal key '%s'" % k)
+                    self.check_header(header, rh)
 
             with fitsio.FITS(fname) as fits:
                 for i in xrange(len(dtypes)):
@@ -423,12 +458,8 @@ class TestReadWrite(unittest.TestCase):
                     self.compare_array(data[4:12,9:17], rdata, "images")
 
                     rh = fits[-1].read_header()
-                    for k,v in header.iteritems():
-                        rv = rh[k]
-                        if isinstance(rv,str):
-                            v = v.strip()
-                            rv = rv.strip()
-                        self.assertEqual(v,rv,"testing equal key '%s'" % k)
+                    self.check_header(header, rh)
+
         finally:
             if os.path.exists(fname):
                 os.remove(fname)
@@ -776,7 +807,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"testing write does not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
                 d = fits[1].read()
                 self.compare_rec(self.data, d, "table read/write")
@@ -843,7 +874,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"write should not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             d = fitsio.read(fname)
             self.compare_rec(self.data, d, "list of dicts, scratch")
@@ -878,7 +909,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"write should not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             d = fitsio.read(fname)
             self.compare_rec(self.data, d, "list of dicts")
@@ -912,7 +943,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"write should not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             d = fitsio.read(fname)
             self.compare_rec_with_var(self.vardata,d,"dict of arrays, var")
@@ -944,7 +975,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"write should not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             d = fitsio.read(fname)
             self.compare_rec(self.data, d, "list of arrays, scratch")
@@ -978,7 +1009,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"write should not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             d = fitsio.read(fname, ext='mytable')
             self.compare_rec(self.data, d, "list of arrays")
@@ -1010,7 +1041,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"write should not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             d = fitsio.read(fname)
             self.compare_rec_with_var(self.vardata,d,"list of arrays, var")
@@ -1037,7 +1068,7 @@ class TestReadWrite(unittest.TestCase):
 
                 self.assertTrue(write_success,"testing write does not raise an error")
                 if not write_success:
-                    skipTest("cannot test result if write failed")
+                    self.skipTest("cannot test result if write failed")
 
             # one row at a time
             with fitsio.FITS(fname) as fits:
@@ -1340,6 +1371,15 @@ class TestReadWrite(unittest.TestCase):
         file and verify that it's the same as what we put in; we don't
         [currently support or] test *writing* bzip2.
         '''
+
+        if 'SKIP_BZIP_TEST' in os.environ:
+            if sys.version_info >= (2,7,0):
+                self.skipTest("skipping bzip tests")
+            else:
+                # skipTest only works for python 2.7+
+                # just return
+                return
+
         fname=tempfile.mktemp(prefix='fitsio-BZ2TableWrite-',suffix='.fits')
         bzfname = fname + '.bz2'
 
@@ -1388,6 +1428,100 @@ class TestReadWrite(unittest.TestCase):
                 fits.write_table(self.data, header=self.keys, extname='mytable')
                 fits[1].write_checksum()
                 fits[1].verify_checksum()
+        finally:
+            if os.path.exists(fname):
+                os.remove(fname)
+
+    def testTrimStrings(self):
+        fname=tempfile.mktemp(prefix='fitsio-Trim-',suffix='.fits')
+        dt=[('fval','f8'),('name','S15'),('vec','f4',2)]
+        n=3
+        data=numpy.zeros(n, dtype=dt)
+        data['fval'] = numpy.random.random(n)
+        data['vec'] = numpy.random.random(n*2).reshape(n,2)
+
+        data['name'] = ['mike','really_long_name_to_fill','jan']
+
+        try:
+            with fitsio.FITS(fname,'rw',clobber=True) as fits:
+                fits.write(data)
+
+            for onconstruct in [True,False]:
+                if onconstruct:
+                    ctrim=True
+                    otrim=False
+                else:
+                    ctrim=False
+                    otrim=True
+
+                with fitsio.FITS(fname,'rw', trim_strings=ctrim) as fits:
+
+                    if ctrim:
+                        dread=fits[1][:]
+                        self.compare_rec(
+                            data,
+                            dread,
+                            "trimmed strings constructor",
+                        )
+
+                        dname=fits[1]['name'][:]
+                        self.compare_array(
+                            data['name'],
+                            dname,
+                            "trimmed strings col read, constructor",
+                        )
+                        dread=fits[1][ ['name'] ][:]
+                        self.compare_array(
+                            data['name'],
+                            dread['name'],
+                            "trimmed strings col read, constructor",
+                        )
+
+
+
+                    dread=fits[1].read(trim_strings=otrim)
+                    self.compare_rec(
+                        data,
+                        dread,
+                        "trimmed strings keyword",
+                    )
+                    dname=fits[1].read(columns='name', trim_strings=otrim)
+                    self.compare_array(
+                        data['name'],
+                        dname,
+                        "trimmed strings col keyword",
+                    )
+                    dread=fits[1].read(columns=['name'], trim_strings=otrim)
+                    self.compare_array(
+                        data['name'],
+                        dread['name'],
+                        "trimmed strings col keyword",
+                    )
+
+
+
+            # convenience function
+            dread=fitsio.read(fname, trim_strings=True)
+            self.compare_rec(
+                data,
+                dread,
+                "trimmed strings convenience function",
+            )
+            dname=fitsio.read(fname, columns='name', trim_strings=True)
+            self.compare_array(
+                data['name'],
+                dname,
+                "trimmed strings col convenience function",
+            )
+            dread=fitsio.read(fname, columns=['name'], trim_strings=True)
+            self.compare_array(
+                data['name'],
+                dread['name'],
+                "trimmed strings col convenience function",
+            )
+
+
+
         finally:
             if os.path.exists(fname):
                 os.remove(fname)
@@ -1477,6 +1611,34 @@ class TestReadWrite(unittest.TestCase):
             if os.path.exists(fname):
                 os.remove(fname)
 
+    def testReadRaw(self):
+        fname=tempfile.mktemp(prefix='fitsio-readraw-',suffix='.fits')
+
+        dt=[('MyName','f8'),('StuffThings','i4'),('Blah','f4')]
+        data=numpy.zeros(3, dtype=dt)
+        data['MyName'] = numpy.random.random(data.size)
+        data['StuffThings'] = numpy.random.random(data.size)
+        data['Blah'] = numpy.random.random(data.size)
+
+        try:
+            with fitsio.FITS(fname,'rw',clobber=True) as fits:
+                fits.write(data)
+                raw1 = fits.read_raw()
+
+            with fitsio.FITS('mem://', 'rw') as fits:
+                fits.write(data)
+                raw2 = fits.read_raw()
+
+            f = open(fname, 'rb')
+            raw3 = f.read()
+            f.close()
+
+            self.assertEqual(raw1, raw2)
+            self.assertEqual(raw1, raw3)
+        except:
+            import traceback
+            traceback.print_exc()
+            self.assertTrue(False, 'Exception in testing read_raw')
 
     def compare_names(self, read_names, true_names, lower=False, upper=False):
         for nread,ntrue in zip(read_names,true_names):
@@ -1487,6 +1649,15 @@ class TestReadWrite(unittest.TestCase):
                 tname = ntrue.upper()
                 mess="upper: '%s' vs '%s'" % (nread,tname)
             self.assertEqual(nread, tname, mess)
+
+    def check_header(self, header, rh):
+        for k in header:
+            v = header[k]
+            rv = rh[k]
+            if isinstance(rv,str):
+                v = v.strip()
+                rv = rv.strip()
+            self.assertEqual(v,rv,"testing equal key '%s'" % k)
 
 
     def compare_headerlist_header(self, header_list, header):
