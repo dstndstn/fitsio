@@ -106,7 +106,8 @@ def read(filename, ext=None, extver=None, **keys):
             return data
 
 
-def read_header(filename, ext=0, extver=None, case_sensitive=False, **keys):
+def read_header(filename, ext=0, extver=None, case_sensitive=False, skip_continue=True,
+                **keys):
     """
     Convenience function to read the header from the specified FITS HDU
 
@@ -134,7 +135,7 @@ def read_header(filename, ext=0, extver=None, case_sensitive=False, **keys):
     """
     item=_make_item(ext,extver=extver)
     with FITS(filename, case_sensitive=case_sensitive) as fits:
-        return fits[item].read_header()
+        return fits[item].read_header(skip_continue=skip_continue)
 
 def read_scamp_head(fname, header=None):
     """
@@ -1382,7 +1383,7 @@ class HDUBase(object):
                 self.write_key(name,value,comment=comment)
 
 
-    def read_header(self):
+    def read_header(self, skip_continue=True):
         """
         Read the header as a FITSHDR
 
@@ -1390,7 +1391,7 @@ class HDUBase(object):
         number.
         """
         # note converting strings
-        return FITSHDR(self.read_header_list(), convert=True)
+        return FITSHDR(self.read_header_list(), convert=True, skip_continue=skip_continue)
 
     def read_header_list(self):
         """
@@ -3811,7 +3812,7 @@ class FITSHDR(object):
         hdr=FITSHDR(recs)
 
     """
-    def __init__(self, record_list=None, convert=False):
+    def __init__(self, record_list=None, convert=False, skip_continue=True):
 
         self._record_list = []
         self._record_map = {}
@@ -3826,6 +3827,9 @@ class FITSHDR(object):
                 self.add_record(r, convert=convert)
         elif isinstance(record_list, list):
             for r in record_list:
+                if skip_continue and r.get('name',None) == 'CONTINUE':
+                    print('Ignoring CONTINUE card:', r)
+                    continue
                 self.add_record(r, convert=convert)
         elif record_list is not None:
                 raise ValueError("expected a dict or list of dicts or FITSHDR")
